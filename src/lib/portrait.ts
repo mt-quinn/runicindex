@@ -261,7 +261,22 @@ async function chromaKeyLimeToAlpha(input: Buffer): Promise<Buffer> {
     })
       .composite([{ input: resized, left: leftX, top: topY }])
       .png()
-      .toBuffer();
+      .toBuffer()
+      .then(async (buf) => {
+        // Remove "green fringe" by shrinking the subject matte slightly.
+        // This is a 3px inset on the *foreground* alpha mask.
+        const { data: rgba, info: outInfo } = await sharp(buf)
+          .ensureAlpha()
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+        const out = Buffer.from(rgba);
+        insetForegroundAlpha(out, outInfo.width, outInfo.height, 3);
+        return sharp(out, {
+          raw: { width: outInfo.width, height: outInfo.height, channels: 4 },
+        })
+          .png()
+          .toBuffer();
+      });
   }
 
   return keyed.png().toBuffer();
@@ -384,6 +399,22 @@ function erodeMask4(mask: Uint8Array, width: number, height: number, iterations:
     cur = next;
   }
   return cur;
+}
+
+function insetForegroundAlpha(buf: Buffer, width: number, height: number, insetPx: number) {
+  if (insetPx <= 0) return;
+  const alphaMin = 18;
+  const mask = new Uint8Array(width * height);
+  for (let i = 0; i < width * height; i++) {
+    const a = buf[i * 4 + 3]!;
+    if (a > alphaMin) mask[i] = 1;
+  }
+  const inner = erodeMask4(mask, width, height, insetPx);
+  for (let i = 0; i < width * height; i++) {
+    if (mask[i] && !inner[i]) {
+      buf[i * 4 + 3] = 0;
+    }
+  }
 }
 
 
