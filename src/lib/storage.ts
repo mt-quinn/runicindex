@@ -1,7 +1,13 @@
 import { kv as vercelKv } from "@vercel/kv";
-import type { RedisClientType } from "redis";
 
 type StoredValue = { value: string; expiresAt?: number };
+
+type MinimalRedisClient = {
+  connect: () => Promise<void>;
+  get: (key: string) => Promise<string | null>;
+  set: (key: string, value: string, opts?: { EX?: number }) => Promise<unknown>;
+  on: (event: "error", listener: (err: unknown) => void) => unknown;
+};
 
 function getMemoryStore(): Map<string, StoredValue> {
   const g = globalThis as any;
@@ -21,9 +27,9 @@ function hasRedisUrl(): boolean {
   return Boolean(process.env.REDIS_URL);
 }
 
-async function getRedisClient(): Promise<RedisClientType> {
+async function getRedisClient(): Promise<MinimalRedisClient> {
   const g = globalThis as any;
-  if (g.__PG_REDIS_CLIENT__) return g.__PG_REDIS_CLIENT__ as RedisClientType;
+  if (g.__PG_REDIS_CLIENT__) return g.__PG_REDIS_CLIENT__ as MinimalRedisClient;
 
   if (!process.env.REDIS_URL) {
     throw new Error("REDIS_URL is not set");
@@ -32,7 +38,7 @@ async function getRedisClient(): Promise<RedisClientType> {
   const { createClient } = await import("redis");
   const client = createClient({
     url: process.env.REDIS_URL,
-  });
+  }) as unknown as MinimalRedisClient;
 
   client.on("error", (err) => {
     console.error("Redis error:", err);
