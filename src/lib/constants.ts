@@ -1,4 +1,4 @@
-export const DAILY_SEED_VERSION = 4;
+export const DAILY_SEED_VERSION = 5;
 
 export const DAILY_STORAGE_KEY = "pearly-gates-game-v1";
 

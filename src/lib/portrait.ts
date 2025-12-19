@@ -160,6 +160,23 @@ async function chromaKeyLimeToAlpha(input: Buffer): Promise<Buffer> {
     if (eroded[idx] || (isBorder && visited[idx])) out[idx * 4 + 3] = 0;
   }
 
+  // Always clear the outermost edge pixels so we never end up with a faint square "frame"
+  // from residual background/antialiasing. This is safe because we pad/crop the subject away
+  // from the image boundary before compositing onto the final canvas.
+  const BORDER_CLEAR_PX = 10;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (
+        x < BORDER_CLEAR_PX ||
+        y < BORDER_CLEAR_PX ||
+        x >= width - BORDER_CLEAR_PX ||
+        y >= height - BORDER_CLEAR_PX
+      ) {
+        out[(y * width + x) * 4 + 3] = 0;
+      }
+    }
+  }
+
   // Adjacency-only feathering:
   // For pixels *next to* removed background (alpha=0), softly reduce alpha if they are close
   // to the sampled background. This smooths edges without touching similarly-colored interior pixels.
