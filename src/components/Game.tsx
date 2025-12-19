@@ -67,8 +67,18 @@ export function Game() {
     await judge(judgment);
   };
 
-  const faceEmoji = state?.visible.faceEmoji || "🙂";
+  const portraitUrl = state?.visible?.portraitUrl;
   const hasProfile = Boolean(state?.visible.name);
+
+  // EXACTLY the mechanism the debug tool used: base pixel size * scale, plus a translateY.
+  // Your chosen values:
+  // - scale: 0.25x
+  // - offset: -13px
+  // Reduce size ~15% from the previous tuned baseline (1400 -> 1190).
+  const PORTRAIT_BASE_PX = 1190;
+  const PORTRAIT_SCALE = 0.25;
+  const PORTRAIT_Y_PX = -13;
+  const portraitSizePx = Math.round(PORTRAIT_BASE_PX * PORTRAIT_SCALE);
 
   // Close the judge drawer on escape
   useEffect(() => {
@@ -146,10 +156,28 @@ export function Game() {
                 />
                 <div
                   ref={faceRef}
-                  className="absolute left-1/2 top-[44%] -translate-x-1/2 -translate-y-1/2 select-none text-[92px] leading-none drop-shadow-[0_10px_24px_rgba(0,0,0,0.75)]"
+                  className="absolute left-1/2 bottom-[-12px] select-none"
                   aria-label="Character face"
+                  style={{ transform: `translateX(-50%) translateY(${PORTRAIT_Y_PX}px)` }}
                 >
-                  {faceEmoji}
+                  {portraitUrl ? (
+                    <img
+                      src={portraitUrl}
+                      alt="Soul portrait"
+                      className="block max-w-none max-h-none object-contain object-bottom drop-shadow-[0_14px_30px_rgba(0,0,0,0.75)] pointer-events-none"
+                      style={{ width: portraitSizePx, height: portraitSizePx }}
+                      draggable={false}
+                    />
+                  ) : (
+                    <div
+                      className="rounded-full bg-black/25 border border-black/35 shadow-[0_18px_30px_rgba(0,0,0,0.50)]"
+                      style={{
+                        width: Math.round(portraitSizePx * 0.86),
+                        height: Math.round(portraitSizePx * 0.86),
+                      }}
+                      aria-hidden="true"
+                    />
+                  )}
                 </div>
 
                 {state.judgment && (

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Bungee, Space_Grotesk, Special_Elite, Caveat } from "next/font/google";
+import { RuntimeCrashOverlay } from "@/components/RuntimeCrashOverlay";
 
 const display = Bungee({
   subsets: ["latin"],
@@ -84,6 +85,7 @@ export default function RootLayout({
               <main className="relative pointer-events-auto h-full w-full flex flex-col">
                 {children}
               </main>
+              <RuntimeCrashOverlay />
             </div>
           </div>
         </div>

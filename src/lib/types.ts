@@ -8,6 +8,7 @@ export type VisibleProfile = {
   age: number;
   occupation: string;
   causeOfDeath: string;
+  portraitUrl?: string; // public URL (Vercel Blob) for the cutout bust portrait
 };
 
 export type HiddenProfile = {
@@ -22,9 +23,10 @@ export type CharacterProfile = {
   gameId: string; // daily: equals dateKey; random: uuid
   mode: GameMode;
   alignment: Alignment;
-  faceEmoji: string;
   visible: VisibleProfile;
   hidden: HiddenProfile;
+  // Back-compat: old cached profiles may contain faceEmoji. We ignore and strip it on read.
+  faceEmoji?: string;
 };
 
 export type QAItem = { q: string; a: string; from?: "SOUL" | "GOD" };
@@ -34,7 +36,7 @@ export type ClientGameState = {
   dateKey: string;
   gameId: string;
   startedAt: number;
-  visible: VisibleProfile & { faceEmoji: string };
+  visible: VisibleProfile;
   qa: QAItem[];
   isComplete: boolean;
   judgment?: "HEAVEN" | "HELL";

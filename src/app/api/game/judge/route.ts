@@ -66,7 +66,7 @@ function buildGodPrompt(
   playerJudgment: "HEAVEN" | "HELL",
   correctJudgment: "HEAVEN" | "HELL",
 ): string {
-  const { visible, hidden, alignment, faceEmoji } = profile;
+  const { visible, hidden, alignment } = profile;
   const transcript =
     qa.length === 0
       ? "(THE PLAYER ASKED NO QUESTIONS.)"
@@ -85,7 +85,6 @@ FACTS (DO NOT CONTRADICT):
 - THE SOUL'S TRUE ALIGNMENT: ${alignment}
 
 CHARACTER CARD (PLAYER SAW THIS):
-- FACE: ${faceEmoji}
 - NAME: ${visible.name}
 - AGE: ${visible.age}
 - OCCUPATION: ${visible.occupation}

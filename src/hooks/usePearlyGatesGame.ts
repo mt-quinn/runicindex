@@ -16,8 +16,8 @@ type StartResponse = {
     age: number;
     occupation: string;
     causeOfDeath: string;
+    portraitUrl?: string;
   };
-  faceEmoji: string;
 };
 
 type AskResponse = { answer?: string; blocked?: boolean; godMessage?: string };
@@ -29,6 +29,14 @@ function reviveState(raw: unknown): ClientGameState | null {
   const v = raw as any;
   if (!v.dateKey || !v.gameId || !v.visible) return null;
   if (v.mode !== "daily" && v.mode !== "debug-random") return null;
+  // Migration: old saves stored a faceEmoji. We removed emojis entirely.
+  if (v.visible && typeof v.visible === "object" && "faceEmoji" in v.visible) {
+    try {
+      delete v.visible.faceEmoji;
+    } catch {
+      // ignore
+    }
+  }
   return v as ClientGameState;
 }
 
@@ -44,7 +52,7 @@ function makeEmptyState(mode: GameMode, dateKey: string, gameId: string): Client
       age: 0,
       occupation: "",
       causeOfDeath: "",
-      faceEmoji: "🙂",
+      portraitUrl: undefined,
     },
     qa: [],
     isComplete: false,
@@ -121,7 +129,7 @@ export function usePearlyGatesGame() {
       const data = (await res.json()) as StartResponse;
       setState((prev) => {
         const next = makeEmptyState(data.mode, data.dateKey, data.gameId);
-        next.visible = { ...data.visible, faceEmoji: data.faceEmoji };
+        next.visible = { ...data.visible };
         // If we were restarting within the same mode/day, keep completion state only if it matches.
         if (prev && prev.mode === data.mode && prev.dateKey === data.dateKey && prev.isComplete) {
           return prev;

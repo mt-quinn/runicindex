@@ -3,8 +3,8 @@ import { randomUUID, randomInt } from "crypto";
 import { DEFAULT_MODEL_ID, getOpenAIClient } from "@/lib/openai";
 import { kvGetJSON, kvSetJSON } from "@/lib/storage";
 import { dailyProfileKey, randomProfileKey } from "@/lib/profileKeys";
-import { pickFaceEmoji } from "@/lib/emoji";
 import { caseNumberFromSeed } from "@/lib/caseNumber";
+import { generateAndStorePortrait, portraitsCanPersist, portraitsEnabled } from "@/lib/portrait";
 import type { Alignment, CharacterProfile, GameMode, HiddenProfile, VisibleProfile } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -19,7 +19,6 @@ type StartResponse = {
   dateKey: string;
   gameId: string;
   visible: VisibleProfile;
-  faceEmoji: string;
 };
 
 const DAILY_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
@@ -47,13 +46,51 @@ export async function POST(req: Request) {
         const desiredName = sanitizeName(existing.visible?.name || "");
         const needsNameSanitize = desiredName && desiredName !== existing.visible?.name;
 
-        if (needsCaseNumber || needsNameSanitize) {
+        const canPersistPortrait = portraitsCanPersist();
+        const needsPortrait = portraitsEnabled() && (!existing.visible?.portraitUrl || !canPersistPortrait);
+        const needsStripEmoji = typeof (existing as any).faceEmoji === "string";
+
+        if (needsCaseNumber || needsNameSanitize || needsPortrait || needsStripEmoji) {
+          let portraitUrl: string | undefined = existing.visible?.portraitUrl;
+          if (needsPortrait) {
+            try {
+              portraitUrl = await generateAndStorePortrait({
+                seed: dateKey,
+                gameId: existing.gameId,
+                visible: { ...existing.visible, caseNumber: desiredCaseNumber },
+                hidden: existing.hidden,
+              });
+            } catch (e) {
+              console.warn("Portrait generation failed (daily cached):", e);
+              portraitUrl = existing.visible?.portraitUrl;
+            }
+          }
+
+          // If we can't persist portraits (local dev), avoid stuffing a giant data URL into KV.
+          // We'll still return the generated portraitUrl in the response.
+          if (!canPersistPortrait && needsPortrait) {
+            const visibleForResponse: VisibleProfile = {
+              ...existing.visible,
+              caseNumber: needsCaseNumber ? desiredCaseNumber : (existing.visible as any).caseNumber,
+              name: needsNameSanitize ? desiredName : existing.visible.name,
+              portraitUrl,
+            };
+            return NextResponse.json({
+              mode: "daily",
+              dateKey,
+              gameId: existing.gameId,
+              visible: visibleForResponse,
+            } satisfies StartResponse);
+          }
+
+          const { faceEmoji: _unused, ...rest } = existing as any;
           const updated: CharacterProfile = {
-            ...existing,
+            ...(rest as CharacterProfile),
             visible: {
               ...existing.visible,
               caseNumber: needsCaseNumber ? desiredCaseNumber : (existing.visible as any).caseNumber,
               name: needsNameSanitize ? desiredName : existing.visible.name,
+              portraitUrl: portraitUrl || existing.visible?.portraitUrl,
             },
           };
           await kvSetJSON(key, updated, { exSeconds: DAILY_TTL_SECONDS });
@@ -62,7 +99,6 @@ export async function POST(req: Request) {
             dateKey,
             gameId: updated.gameId,
             visible: updated.visible,
-            faceEmoji: updated.faceEmoji,
           } satisfies StartResponse);
         }
 
@@ -71,20 +107,32 @@ export async function POST(req: Request) {
           dateKey,
           gameId: existing.gameId,
           visible: existing.visible,
-          faceEmoji: existing.faceEmoji,
         };
         return NextResponse.json(res);
       }
 
       const alignment: Alignment = randomInt(0, 2) === 0 ? "GOOD" : "EVIL";
       const gameId = dateKey;
-      const faceEmoji = pickFaceEmoji(dateKey);
       const { visible, hidden } = await generateProfile({
         mode,
         seed: dateKey,
         alignment,
-        faceEmoji,
       });
+
+      const canPersistPortrait = portraitsCanPersist();
+      let portraitUrl: string | undefined = undefined;
+      if (portraitsEnabled()) {
+        try {
+          portraitUrl = await generateAndStorePortrait({
+            seed: dateKey,
+            gameId,
+            visible: { ...visible, caseNumber: caseNumberFromSeed(dateKey) },
+            hidden,
+          });
+        } catch (e) {
+          console.warn("Portrait generation failed (daily new):", e);
+        }
+      }
 
       const profile: CharacterProfile = {
         version: 1,
@@ -92,13 +140,21 @@ export async function POST(req: Request) {
         mode: "daily",
         gameId,
         alignment,
-        faceEmoji,
-        visible: { ...visible, caseNumber: caseNumberFromSeed(dateKey) },
+        visible: {
+          ...visible,
+          caseNumber: caseNumberFromSeed(dateKey),
+          portraitUrl: canPersistPortrait ? portraitUrl : undefined,
+        },
         hidden,
       };
       await kvSetJSON(key, profile, { exSeconds: DAILY_TTL_SECONDS });
 
-      const res: StartResponse = { mode: "daily", dateKey, gameId, visible, faceEmoji };
+      const res: StartResponse = {
+        mode: "daily",
+        dateKey,
+        gameId,
+        visible: { ...profile.visible, portraitUrl },
+      };
       return NextResponse.json(res);
     }
 
@@ -107,26 +163,47 @@ export async function POST(req: Request) {
     const gameId = randomUUID();
     const key = randomProfileKey(gameId);
     const alignment: Alignment = randomInt(0, 2) === 0 ? "GOOD" : "EVIL";
-    const faceEmoji = pickFaceEmoji(gameId);
     const { visible, hidden } = await generateProfile({
       mode,
       seed: gameId,
       alignment,
-      faceEmoji,
     });
+
+    const canPersistPortrait = portraitsCanPersist();
+    let portraitUrl: string | undefined = undefined;
+    if (portraitsEnabled()) {
+      try {
+        portraitUrl = await generateAndStorePortrait({
+          seed: gameId,
+          gameId,
+          visible: { ...visible, caseNumber: caseNumberFromSeed(gameId) },
+          hidden,
+        });
+      } catch (e) {
+        console.warn("Portrait generation failed (random):", e);
+      }
+    }
 
     const profile: CharacterProfile = {
       version: 1,
       mode: "debug-random",
       gameId,
       alignment,
-      faceEmoji,
-      visible: { ...visible, caseNumber: caseNumberFromSeed(gameId) },
+      visible: {
+        ...visible,
+        caseNumber: caseNumberFromSeed(gameId),
+        portraitUrl: canPersistPortrait ? portraitUrl : undefined,
+      },
       hidden,
     };
     await kvSetJSON(key, profile, { exSeconds: RANDOM_TTL_SECONDS });
 
-    const res: StartResponse = { mode: "debug-random", dateKey, gameId, visible, faceEmoji };
+    const res: StartResponse = {
+      mode: "debug-random",
+      dateKey,
+      gameId,
+      visible: { ...profile.visible, portraitUrl },
+    };
     return NextResponse.json(res);
   } catch (error) {
     console.error("Error in /api/game/start:", error);
@@ -138,11 +215,10 @@ async function generateProfile(args: {
   mode: GameMode;
   seed: string;
   alignment: Alignment;
-  faceEmoji: string;
 }): Promise<{ visible: VisibleProfile; hidden: HiddenProfile }> {
   const openai = getOpenAIClient();
 
-  const prompt = buildCharacterPrompt(args.seed, args.alignment, args.faceEmoji);
+  const prompt = buildCharacterPrompt(args.seed, args.alignment);
   const response = await openai.chat.completions.create({
     model: DEFAULT_MODEL_ID,
     messages: [{ role: "system", content: prompt }],
@@ -153,16 +229,15 @@ async function generateProfile(args: {
   });
 
   const raw = response.choices[0]?.message?.content?.trim() ?? "";
-  return parseCharacterResponse(raw, args.faceEmoji);
+  return parseCharacterResponse(raw);
 }
 
-function buildCharacterPrompt(seed: string, alignment: Alignment, faceEmoji: string): string {
+function buildCharacterPrompt(seed: string, alignment: Alignment): string {
   return `You are generating a daily character for a mobile web interrogation game at the Pearly Gates.
 
 The backend has already decided the TRUE ALIGNMENT of today's soul by coinflip. You MUST build a consistent character whose life actually matches that alignment.
 
 TRUE ALIGNMENT: ${alignment}
-FACE EMOJI (for flavor only): ${faceEmoji}
 SEED (for determinism cues only): ${seed}
 
 OUTPUT REQUIREMENTS:
@@ -204,7 +279,6 @@ IMPORTANT WORLD RULE:
 
 function parseCharacterResponse(
   raw: string,
-  faceEmoji: string,
 ): { visible: VisibleProfile; hidden: HiddenProfile } {
   try {
     const parsed = JSON.parse(raw) as any;
