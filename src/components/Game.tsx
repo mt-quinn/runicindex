@@ -26,6 +26,7 @@ export function Game() {
   } = usePearlyGatesGame();
 
   const [question, setQuestion] = useState("");
+  const [judgeDrawerOpen, setJudgeDrawerOpen] = useState(false);
   const qaScrollRef = useRef<HTMLDivElement | null>(null);
   const faceRef = useRef<HTMLDivElement | null>(null);
 
@@ -68,6 +69,16 @@ export function Game() {
 
   const faceEmoji = state?.visible.faceEmoji || "🙂";
   const hasProfile = Boolean(state?.visible.name);
+
+  // Close the judge drawer on escape
+  useEffect(() => {
+    if (!judgeDrawerOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setJudgeDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [judgeDrawerOpen]);
 
   return (
     <div className="h-full flex flex-col">
@@ -116,6 +127,14 @@ export function Game() {
               <div className="absolute top-8 right-10 w-36 h-36 bg-pg-gold/15 blur-2xl rounded-full" />
             </div>
 
+            {/* Click-away backdrop for judge drawer (top half only) */}
+            {!state.isComplete && judgeDrawerOpen && (
+              <div
+                className="absolute inset-0 z-20"
+                onClick={() => setJudgeDrawerOpen(false)}
+              />
+            )}
+
             {/* Gates asset + character face */}
             <div className="absolute inset-x-0 top-8 bottom-6 flex items-center justify-center">
               <div className="relative w-[min(340px,85%)]">
@@ -145,32 +164,20 @@ export function Game() {
                     </div>
                   </div>
                 )}
-
-                {/* Stamp bubble inside the gates scene (bottom-left) */}
-                {!state.isComplete && (
-                  <div className="absolute left-1/2 -translate-x-1/2 bottom-2 z-30">
-                    <div className="rounded-3xl border border-white/15 bg-black/35 backdrop-blur px-2 py-2 shadow-pg-card">
-                      <div className="flex items-center justify-center gap-2">
-                        <DraggableStamp
-                          label="HEAVEN"
-                          colorClass="text-emerald-800"
-                          disabled={!canStamp}
-                          faceRef={faceRef}
-                          onStamp={() => handleStamp("HEAVEN")}
-                        />
-                        <DraggableStamp
-                          label="HELL"
-                          colorClass="text-pg-red"
-                          disabled={!canStamp}
-                          faceRef={faceRef}
-                          onStamp={() => handleStamp("HELL")}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
+
+            {/* Judge drawer (left side) */}
+            {!state.isComplete && (
+              <JudgeDrawer
+                open={judgeDrawerOpen}
+                setOpen={setJudgeDrawerOpen}
+                canStamp={canStamp}
+                faceRef={faceRef}
+                onHeaven={() => handleStamp("HEAVEN")}
+                onHell={() => handleStamp("HELL")}
+              />
+            )}
           </section>
 
           {/* Bottom half: Desk */}
@@ -259,7 +266,9 @@ export function Game() {
                         type="button"
                         onClick={onSubmitQuestion}
                         disabled={!canAsk || !question.trim()}
-                        className="flex-1 rounded-full bg-gradient-to-r from-pg-gold to-pg-cyan px-4 py-2 text-[0.85rem] font-bold text-black shadow-pg-glow opacity-100 disabled:cursor-not-allowed disabled:brightness-75 disabled:saturate-75"
+                    className={`flex-1 rounded-full bg-gradient-to-r from-pg-gold to-pg-cyan px-4 py-2 text-[0.85rem] font-bold text-black shadow-pg-glow opacity-100 disabled:cursor-not-allowed disabled:brightness-75 disabled:saturate-75 ${
+                      asking ? "brightness-75 saturate-75" : ""
+                    }`}
                       >
                         {asking ? "Asking…" : `Ask (${qaCount + 1}/${MAX_QUESTIONS})`}
                       </button>
@@ -357,6 +366,79 @@ export function Game() {
           onClose={dismissPopup}
         />
       )}
+    </div>
+  );
+}
+
+function JudgeDrawer({
+  open,
+  setOpen,
+  canStamp,
+  faceRef,
+  onHeaven,
+  onHell,
+}: {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  canStamp: boolean;
+  faceRef: React.RefObject<HTMLDivElement | null>;
+  onHeaven: () => void;
+  onHell: () => void;
+}) {
+  const drawerWidth = 150;
+  const tabWidth = 44;
+
+  return (
+    <div
+      className="absolute left-0 top-1/2 -translate-y-1/2 z-30 select-none"
+      style={{
+        width: drawerWidth + tabWidth,
+        transform: open ? "translateX(0px) translateY(-50%)" : `translateX(-${drawerWidth}px) translateY(-50%)`,
+        transition: "transform 240ms cubic-bezier(0.2, 0.9, 0.2, 1)",
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-stretch">
+        {/* Drawer panel */}
+        <div
+          className="h-44 rounded-r-2xl border border-white/15 bg-black/45 backdrop-blur shadow-pg-card px-3 py-3 flex flex-col justify-center gap-3"
+          style={{ width: drawerWidth }}
+        >
+          <DraggableStamp
+            label="HEAVEN"
+            colorClass="text-emerald-800"
+            disabled={!canStamp}
+            faceRef={faceRef}
+            onStamp={onHeaven}
+          />
+          <DraggableStamp
+            label="HELL"
+            colorClass="text-pg-red"
+            disabled={!canStamp}
+            faceRef={faceRef}
+            onStamp={onHell}
+          />
+        </div>
+
+        {/* Tab */}
+        <button
+          type="button"
+          className="h-44 rounded-r-[999px] border border-white/15 bg-black/55 backdrop-blur shadow-pg-card flex items-center justify-center px-2"
+          style={{ width: tabWidth }}
+          onClick={() => setOpen(!open)}
+        >
+          <span
+            className="text-[0.62rem] font-black tracking-[0.25em] text-pg-gold uppercase"
+            style={{
+              writingMode: "vertical-rl",
+              transform: "rotate(180deg)",
+              lineHeight: 1,
+            }}
+          >
+            OPEN TO JUDGE
+          </span>
+        </button>
+      </div>
     </div>
   );
 }
