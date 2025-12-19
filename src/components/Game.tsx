@@ -181,24 +181,6 @@ export function Game() {
             <div className="flex-1 min-h-0 flex gap-3">
               {/* Left: interrogation */}
               <div className="flex-1 min-w-0 flex flex-col gap-3">
-                {/* Bottom-panel title row lives on the left so the toe tag can start at the top */}
-                {!state.isComplete ? (
-                  <div className="text-[0.7rem] text-pg-muted flex items-center justify-between gap-2">
-                    <span className="uppercase tracking-[0.18em]">Interrogation</span>
-                  </div>
-                ) : (
-                  <div className="text-[0.75rem] text-pg-muted flex items-center justify-between">
-                    <span className="uppercase tracking-[0.18em]">Verdict</span>
-                    <span className="text-pg-gold font-semibold">
-                      {state.wasCorrect === undefined
-                        ? "Awaiting God…"
-                        : state.wasCorrect
-                          ? "Correct"
-                          : "Wrong"}
-                    </span>
-                  </div>
-                )}
-
                 {/* Q/A log */}
                 <div
                   ref={qaScrollRef}
