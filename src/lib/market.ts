@@ -8,6 +8,7 @@ import {
 } from "@/lib/constants";
 import { marketHourKey, marketHourLockKey } from "@/lib/profileKeys";
 import { prevUtcHourKey } from "@/lib/hourKey";
+import { makeSeedMarketHour } from "@/lib/marketSeed";
 // NOTE: Image generation is temporarily disabled for faster iteration.
 // import { generateAndStoreCompanyLogo, generateAndStoreNewsImage, imagesEnabled } from "@/lib/images";
 import type { Company, MarketHourState, NewsItem } from "@/lib/types";
@@ -28,19 +29,20 @@ export async function getOrCreateMarketHour(hourKey: string): Promise<MarketHour
   const existing = await kvGetJSON<MarketHourState>(key);
   if (existing && existing.hourKey === hourKey && Array.isArray(existing.companies)) return existing;
 
-  // Prevent stampede on the hour boundary.
-  const lock = await kvTryAcquireLock({ key: marketHourLockKey(hourKey), ttlSeconds: 55 });
+  // Prevent stampede on the hour boundary: one generator, everyone else waits.
+  // LLM calls can take 60–90s; give the lock enough TTL.
+  const lock = await kvTryAcquireLock({ key: marketHourLockKey(hourKey), ttlSeconds: 180 });
   if (!lock) {
-    // Someone else is generating. Short wait + re-read.
-    await sleep(650);
-    const again = await kvGetJSON<MarketHourState>(key);
-    if (again) return again;
-    // If still missing, proceed without lock (dev/misconfig fallback).
+    const waited = await waitForMarketHour(key, 120_000);
+    if (waited) return waited;
+    throw new MarketGenerationError("Market generation in progress. Try again in a moment.");
   }
 
   const prevKey = prevUtcHourKey(hourKey);
   const prev = prevKey !== hourKey ? await kvGetJSON<MarketHourState>(marketHourKey(prevKey)) : null;
-  const next = await generateMarketHour({ hourKey, prev });
+  // If there is no previous hour, use the baked-in seed and store it as THIS hour.
+  // This avoids any LLM “first market” race and guarantees identical starting listings globally.
+  const next = prev ? await generateMarketHour({ hourKey, prev }) : makeSeedMarketHour(hourKey);
   // Image generation intentionally commented out for now.
   // const withImages = await attachImages(next);
   // await kvSetJSON(key, withImages, { exSeconds: MARKET_TTL_SECONDS });
@@ -48,13 +50,25 @@ export async function getOrCreateMarketHour(hourKey: string): Promise<MarketHour
   return next;
 }
 
+async function waitForMarketHour(key: string, timeoutMs: number): Promise<MarketHourState | null> {
+  const start = Date.now();
+  let delay = 400;
+  while (Date.now() - start < timeoutMs) {
+    const cur = await kvGetJSON<MarketHourState>(key);
+    if (cur) return cur;
+    await sleep(delay);
+    delay = Math.min(2500, Math.round(delay * 1.35));
+  }
+  return null;
+}
+
 async function generateMarketHour(args: {
   hourKey: string;
-  prev: MarketHourState | null;
+  prev: MarketHourState;
 }): Promise<MarketHourState> {
   const openai = getOpenAIClient();
 
-  const prompt = buildMarketPrompt(args.hourKey, args.prev);
+  const prompt = buildMarketDeltaPrompt(args.hourKey, args.prev);
   const response = await openai.chat.completions.create(({
     model: DEFAULT_MODEL_ID,
     messages: [{ role: "system", content: prompt }],
@@ -76,7 +90,7 @@ async function generateMarketHour(args: {
     });
   }
   try {
-    const parsed = parseMarketResponseOrThrow(raw, args.hourKey, args.prev);
+    const parsed = parseMarketDeltaResponseOrThrow(raw, args.hourKey, args.prev);
     return parsed;
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Market generation failed.";
@@ -84,12 +98,7 @@ async function generateMarketHour(args: {
   }
 }
 
-function buildMarketPrompt(hourKey: string, prev: MarketHourState | null): string {
-  const prevCompanies = prev?.companies ?? [];
-  const prevNews = prev?.news ?? [];
-  const prevIds = prevCompanies.map((c) => c.id);
-  const hasPrev = prevIds.length > 0;
-
+function buildMarketDeltaPrompt(hourKey: string, prev: MarketHourState): string {
   return `You are the MARKET SIMULATOR for a fictional D&D fantasy themed stock market.
 
 Every hour, you output the next snapped market state. Players trade in real time at THIS HOUR'S snapped prices.
@@ -103,29 +112,25 @@ Core design goals:
 MARKET RULES:
 - Exactly ${MARKET_COMPANY_COUNT} LISTED companies must exist after your update.
 - Each company represents a FANTASY CONCEPT (broad or specific): e.g. FIREBALL, ORCS, DARK PATRONS, SNEAK ATTACKS.
-- If there is a previous hour, KEEP THE SAME LISTED COMPANIES unless you explicitly delist one (max ${MAX_DELISTINGS_PER_HOUR}).
-- If you delist a company, it disappears from companies[] and is listed in delist[]. You MUST also introduce a new company to keep the total at ${MARKET_COMPANY_COUNT}.
+- KEEP THE SAME LISTED COMPANIES unless you explicitly delist one (max ${MAX_DELISTINGS_PER_HOUR}).
+- If you delist a company, you MUST specify a replacement listing so we still have 25 companies.
 - Occasionally delist a company and replace it with a new concept. Max delistings this hour: ${MAX_DELISTINGS_PER_HOUR}.
 - Prices must be positive, readable, and not explode absurdly in one hour. Use volatility but keep it believable.
-- Starting prices for NEW listings:
-  - Any company that is NEW this hour (not present in the previous hour) MUST have price between ${LISTING_START_PRICE_MIN} and ${LISTING_START_PRICE_MAX}.
-  - If there is NO previous hour (this is the first hour), then ALL ${MARKET_COMPANY_COUNT} companies are NEW, so ALL prices MUST be within ${LISTING_START_PRICE_MIN}..${LISTING_START_PRICE_MAX}.
+- Starting prices for NEW listings (replacement tickers) MUST be within ${LISTING_START_PRICE_MIN}..${LISTING_START_PRICE_MAX}.
 - Output must be deterministic for THIS HOUR once generated (the server will cache it).
 
 OUTPUT FORMAT (MANDATORY):
 - Respond with STRICT JSON ONLY.
 - No markdown fences. No commentary. No trailing text.
 
-You must output exactly this JSON shape:
+You must output exactly this JSON shape (DELTAS ONLY):
 {
   "bigNews": [
     { "id": "string", "title": "string", "body": "string", "impact": "string", "imagePrompt": "string" }
   ],
-  "companies": [
+  "updates": [
     {
       "id": "string",
-      "name": "string",
-      "concept": "string",
       "price": number,
       "companyNewsTitle": "string",
       "companyNewsBody": "string",
@@ -134,19 +139,26 @@ You must output exactly this JSON shape:
     }
   ],
   "delist": [
-    { "id": "string", "reason": "string" }
+    {
+      "id": "string",
+      "reason": "string",
+      "replacement": {
+        "id": "string",
+        "name": "string",
+        "concept": "string",
+        "price": number,
+        "logoPrompt": "string"
+      }
+    }
   ]
 }
 
 CONSTRAINTS:
-- companies[].id must be 3–6 chars, uppercase A-Z only (ticker-like), unique.
-- DO NOT use placeholder ids like AAA/AAB/ABC. Prefer mnemonic tickers tied to the concept.
-- companies[].name MUST be a fantasy concept name (not "Unknown", not "Mystery", not generic placeholders).
-- companies[].concept should be a 1-line explanation of what the concept represents in-world.
-- Provide REALISTIC price variety each hour. Do NOT output all $1.00 or near-identical prices.
-- Price guidance:
-  - If this is the FIRST hour (no previous), all prices must stay within ${LISTING_START_PRICE_MIN}..${LISTING_START_PRICE_MAX}.
-  - Otherwise, existing tickers may drift beyond that range over time, but newly listed tickers must still start within the band.
+- You MUST provide updates for every listed company id exactly once (25 updates).
+- updates[].id MUST match an existing listed id in the previous hour state, except for a replacement id from delist[].
+- Price rules:
+  - All prices must be > 0.
+  - Most hourly moves should be within -12%..+12%. A few can be bigger on major events, but keep it legible.
 - Most hourly moves should be within -12%..+12%. A few can be bigger on major events, but keep it legible.
 - Keep text short to avoid truncation:
   - bigNews.title <= 72 chars
@@ -158,15 +170,17 @@ CONSTRAINTS:
   - logoPrompt <= 140 chars
   - imagePrompt <= 160 chars
 - bigNews length: 2–4 items.
-- company news: 1 story per company (title/body/impact).
+- company news: 1 story per company (title/body/impact) via updates[].
 - logoPrompt: a short prompt for generating a square logo for that concept (no text, no watermark).
 - imagePrompt: a short prompt for generating an illustration for that big news (no text, no watermark).
 - delist length: 0..${MAX_DELISTINGS_PER_HOUR}
 
-PREVIOUS HOUR (if any):
-${prev ? JSON.stringify({ hourKey: prev.hourKey, companies: prevCompanies.map((c) => ({ id: c.id, name: c.name, concept: c.concept, price: c.price })), newsHeadlines: prevNews.slice(0, 8).map((n) => ({ kind: n.kind, title: n.title })) }) : "null"}
-
-PREVIOUS LISTED IDS (if any): ${prevIds.length ? prevIds.join(", ") : "(none)"}
+PREVIOUS HOUR STATE (authoritative):
+${JSON.stringify({
+    hourKey: prev.hourKey,
+    companies: prev.companies.map((c) => ({ id: c.id, name: c.name, concept: c.concept, price: c.price })),
+    newsHeadlines: prev.news.slice(0, 10).map((n) => ({ kind: n.kind, title: n.title })),
+  })}
 
 CURRENT HOURKEY (UTC): ${hourKey}
 
@@ -174,7 +188,7 @@ Remember: keep the world coherent. Move prices based on the narrative of the wor
 `.trim();
 }
 
-function parseMarketResponseOrThrow(raw: string, hourKey: string, prev: MarketHourState | null): MarketHourState {
+function parseMarketDeltaResponseOrThrow(raw: string, hourKey: string, prev: MarketHourState): MarketHourState {
   const jsonText = extractJSON(raw);
   if (!jsonText) throw new MarketGenerationError("Market LLM output did not contain parseable JSON.", { raw });
 
@@ -184,136 +198,133 @@ function parseMarketResponseOrThrow(raw: string, hourKey: string, prev: MarketHo
   } catch {
     throw new MarketGenerationError("Market LLM JSON parse failed.", { raw });
   }
-    const companiesRaw = Array.isArray(obj?.companies) ? obj.companies : [];
-    const bigNewsRaw = Array.isArray(obj?.bigNews) ? obj.bigNews : [];
-    const delistRaw = Array.isArray(obj?.delist) ? obj.delist : [];
 
-    const prevById = new Map<string, Company>((prev?.companies ?? []).map((c) => [c.id, c]));
+  const bigNewsRaw = Array.isArray(obj?.bigNews) ? obj.bigNews : [];
+  const updatesRaw = Array.isArray(obj?.updates) ? obj.updates : [];
+  const delistRaw = Array.isArray(obj?.delist) ? obj.delist : [];
 
-    const companies: Company[] = companiesRaw
-      .map((c: any) => {
-        const id = String(c?.id || "").trim().toUpperCase();
-        const name = String(c?.name || id || "Unknown").trim();
-        const concept = String(c?.concept || "").trim() || name;
-        const logoPrompt = String(c?.logoPrompt || "").trim() || undefined;
-        const priceNum = Number(c?.price);
-        const isNewListing = !prevById.has(id);
-        if (!Number.isFinite(priceNum)) return null;
+  const prevById = new Map(prev.companies.map((c) => [c.id, c]));
 
-        // IMPORTANT:
-        // - Do NOT clamp starting prices, because clamping silently flattens values (e.g. many >$25 become $25),
-        //   which makes the market look fake and can trip our "variation" checks.
-        // - Instead, treat out-of-band starting prices as invalid output and fail loudly (with raw attached).
-        if (isNewListing) {
-          if (priceNum < LISTING_START_PRICE_MIN || priceNum > LISTING_START_PRICE_MAX) return null;
-        } else {
-          if (priceNum <= 0) return null;
-        }
+  // Start from previous companies and apply optional delist/replacement.
+  let companies: Company[] = prev.companies.map((c) => ({ ...c }));
+  const delisted: MarketHourState["delisted"] = [];
 
-        const price = isNewListing ? priceNum : clamp(priceNum, 0.01, 999999);
-        const prevPrice = prevById.get(id)?.price ?? price;
-        const change = price - prevPrice;
-        const changePct = prevPrice > 0 ? (change / prevPrice) * 100 : 0;
-        return {
-          id,
-          name,
-          concept,
-          price: round2(price),
-          prevPrice: round2(prevPrice),
-          change: round2(change),
-          changePct: round2(changePct),
-          status: "LISTED" as const,
-          logoPrompt,
-        };
-      })
-      .filter(Boolean)
-      .filter((c: Company) => /^[A-Z]{3,6}$/.test(c.id));
+  for (const d of delistRaw.slice(0, MAX_DELISTINGS_PER_HOUR)) {
+    const id = String(d?.id || "").trim().toUpperCase();
+    if (!prevById.has(id)) continue;
 
-    // Enforce unique IDs and exact count.
-    const seen = new Set<string>();
-    const uniq: Company[] = [];
-    for (const c of companies) {
-      if (seen.has(c.id)) continue;
-      seen.add(c.id);
-      uniq.push(c);
-    }
+    const reason = String(d?.reason || "Delisted.").trim();
+    const rep = d?.replacement;
+    const repId = String(rep?.id || "").trim().toUpperCase();
+    const repName = String(rep?.name || repId).trim();
+    const repConcept = String(rep?.concept || repName).trim() || repName;
+    const repPriceNum = Number(rep?.price);
+    const repLogoPrompt = String(rep?.logoPrompt || "").trim() || undefined;
 
-    if (uniq.length !== MARKET_COMPANY_COUNT) {
-      throw new MarketGenerationError(
-        `Market LLM output had ${uniq.length} valid unique companies; expected ${MARKET_COMPANY_COUNT}.`,
-        { raw },
-      );
-    }
-    const finalCompanies = uniq;
+    if (!/^[A-Z]{3,6}$/.test(repId)) continue;
+    if (prevById.has(repId)) continue;
+    if (!Number.isFinite(repPriceNum)) continue;
+    if (repPriceNum < LISTING_START_PRICE_MIN || repPriceNum > LISTING_START_PRICE_MAX) continue;
 
-    const uniquePrices = new Set(finalCompanies.map((c) => c.price.toFixed(2)));
-    if (uniquePrices.size < 6) {
-      throw new MarketGenerationError("Market LLM output prices lack variation.", { raw });
-    }
+    const delistPrice = prevById.get(id)!.price;
+    delisted.push({
+      id,
+      delistedAtHourKey: hourKey,
+      delistPrice: round2(delistPrice),
+      reason,
+    });
 
-    const news: NewsItem[] = [];
-    for (const n of bigNewsRaw.slice(0, 6)) {
-      news.push({
-        id: String(n?.id || `big-${news.length}`).trim() || `big-${news.length}`,
-        kind: "BIG",
-        hourKey,
-        title: String(n?.title || "Big News").trim(),
-        body: String(n?.body || "").trim(),
-        impact: String(n?.impact || "").trim(),
-        companyIds: undefined,
-        imageUrl: undefined,
-        imagePrompt: String(n?.imagePrompt || "").trim() || undefined,
-      });
-    }
-    if (news.filter((n) => n.kind === "BIG").length < 1) {
-      throw new MarketGenerationError("Market LLM output missing bigNews items.", { raw });
-    }
+    companies = companies.filter((c) => c.id !== id);
+    companies.push({
+      id: repId,
+      name: repName,
+      concept: repConcept,
+      price: round2(repPriceNum),
+      prevPrice: round2(repPriceNum),
+      change: 0,
+      changePct: 0,
+      status: "LISTED",
+      logoPrompt: repLogoPrompt,
+    });
 
-    // Per-company news
-    const companyMap = new Map(finalCompanies.map((c) => [c.id, c]));
-    for (const c of companiesRaw) {
-      const id = String(c?.id || "").trim().toUpperCase();
-      if (!companyMap.has(id)) continue;
-      const title = String(c?.companyNewsTitle || "").trim();
-      const body = String(c?.companyNewsBody || "").trim();
-      const impact = String(c?.companyNewsImpact || "").trim();
-      if (!title && !body) continue;
-      news.push({
-        id: `co-${id}-${hourKey}`,
-        kind: "COMPANY",
-        hourKey,
-        title: title || `${id} Update`,
-        body,
-        impact,
-        companyIds: [id],
-        imageUrl: undefined,
-      });
-    }
+    // Update maps for applying updates
+    prevById.delete(id);
+  }
 
-    // Delistings (metadata only; settlement is handled when accounts are loaded/traded)
-    const delisted: MarketHourState["delisted"] = [];
-    const prevIds = new Set((prev?.companies ?? []).map((c) => c.id));
-    const curIds = new Set(finalCompanies.map((c) => c.id));
-    for (const d of delistRaw.slice(0, MAX_DELISTINGS_PER_HOUR)) {
-      const id = String(d?.id || "").trim().toUpperCase();
-      if (!id || !prevIds.has(id) || curIds.has(id)) continue;
-      const delistPrice = prevById.get(id)?.price ?? 1;
-      delisted.push({
-        id,
-        delistedAtHourKey: hourKey,
-        delistPrice: round2(delistPrice),
-        reason: String(d?.reason || "Delisted.").trim(),
-      });
-    }
+  if (companies.length !== MARKET_COMPANY_COUNT) {
+    throw new MarketGenerationError("Delta application resulted in incorrect company count.", { raw });
+  }
 
-    return {
-      version: 1,
+  const nextById = new Map(companies.map((c) => [c.id, c]));
+
+  // Apply per-company updates (must cover all 25 once).
+  const seen = new Set<string>();
+  const companyNews: NewsItem[] = [];
+
+  for (const u of updatesRaw) {
+    const id = String(u?.id || "").trim().toUpperCase();
+    if (!nextById.has(id)) continue;
+    if (seen.has(id)) continue;
+    const priceNum = Number(u?.price);
+    if (!Number.isFinite(priceNum) || priceNum <= 0) continue;
+    seen.add(id);
+
+    const cur = nextById.get(id)!;
+    const prevPrice = prevById.get(id)?.price ?? cur.price;
+    cur.prevPrice = round2(prevPrice);
+    cur.price = round2(priceNum);
+    cur.change = round2(cur.price - cur.prevPrice);
+    cur.changePct = round2(cur.prevPrice > 0 ? (cur.change / cur.prevPrice) * 100 : 0);
+
+    const title = String(u?.companyNewsTitle || "").trim();
+    const body = String(u?.companyNewsBody || "").trim();
+    const impact = String(u?.companyNewsImpact || "").trim();
+    const logoPrompt = String(u?.logoPrompt || "").trim() || undefined;
+    if (logoPrompt) cur.logoPrompt = logoPrompt;
+
+    companyNews.push({
+      id: `co-${id}-${hourKey}`,
+      kind: "COMPANY",
       hourKey,
-      generatedAt: Date.now(),
-      companies: finalCompanies,
-      delisted,
-      news,
-    };
+      title: title || `${id} Update`,
+      body,
+      impact,
+      companyIds: [id],
+      imageUrl: undefined,
+    });
+  }
+
+  if (seen.size !== MARKET_COMPANY_COUNT) {
+    throw new MarketGenerationError(
+      `Market delta missing updates for ${MARKET_COMPANY_COUNT - seen.size} companies.`,
+      { raw },
+    );
+  }
+
+  const bigNews: NewsItem[] = bigNewsRaw.slice(0, 6).map((n: any, idx: number) => ({
+    id: String(n?.id || `big-${idx}`).trim() || `big-${idx}`,
+    kind: "BIG",
+    hourKey,
+    title: String(n?.title || "Big News").trim(),
+    body: String(n?.body || "").trim(),
+    impact: String(n?.impact || "").trim(),
+    companyIds: undefined,
+    imageUrl: undefined,
+    imagePrompt: String(n?.imagePrompt || "").trim() || undefined,
+  }));
+
+  if (bigNews.length < 1) {
+    throw new MarketGenerationError("Market LLM output missing bigNews items.", { raw });
+  }
+
+  return {
+    version: 1,
+    hourKey,
+    generatedAt: Date.now(),
+    companies: Array.from(nextById.values()).sort((a, b) => a.id.localeCompare(b.id)),
+    delisted,
+    news: [...bigNews, ...companyNews],
+  };
 }
 
 function extractJSON(raw: string): string | null {

@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import { useFantasyExchange } from "@/hooks/useFantasyExchange";
 
 type Tab = "market" | "news";
+type SortKey = "id" | "name" | "price" | "changePct";
+type SortDir = "asc" | "desc";
 
 export function Game() {
   const {
@@ -18,7 +20,6 @@ export function Game() {
     execute,
     reset,
     receipt,
-    companiesSorted,
   } = useFantasyExchange();
 
   const cash = account?.cash ?? 0;
@@ -26,6 +27,10 @@ export function Game() {
   const bankrupt = account?.bankrupt ?? false;
 
   const [tab, setTab] = useState<Tab>("market");
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
+    key: "changePct",
+    dir: "desc",
+  });
 
   const positions = useMemo(() => {
     const pos = account?.positions || {};
@@ -35,6 +40,40 @@ export function Game() {
     rows.sort((a, b) => Math.abs(b.shares) - Math.abs(a.shares));
     return rows;
   }, [account?.positions]);
+
+  const investedIds = useMemo(() => {
+    const pos = account?.positions || {};
+    return new Set(Object.keys(pos).filter((k) => Number(pos[k]) !== 0));
+  }, [account?.positions]);
+
+  const marketRows = useMemo(() => {
+    if (!market?.companies) return [];
+    const rows = [...market.companies];
+
+    const cmp = (a: any, b: any) => {
+      const investedA = investedIds.has(a.id) ? 1 : 0;
+      const investedB = investedIds.has(b.id) ? 1 : 0;
+      if (investedA !== investedB) return investedB - investedA; // invested first
+
+      let primary = 0;
+      if (sort.key === "id") primary = String(a.id).localeCompare(String(b.id));
+      else if (sort.key === "name") primary = String(a.name).localeCompare(String(b.name));
+      else if (sort.key === "price") primary = Number(a.price) - Number(b.price);
+      else if (sort.key === "changePct") primary = Number(a.changePct) - Number(b.changePct);
+
+      if (primary !== 0) return sort.dir === "asc" ? primary : -primary;
+
+      // Secondary sort: price highest first (within invested/non-invested groups)
+      const priceTie = Number(b.price) - Number(a.price);
+      if (priceTie !== 0) return priceTie;
+
+      // Final stable tie-breaker
+      return String(a.id).localeCompare(String(b.id));
+    };
+
+    rows.sort(cmp);
+    return rows;
+  }, [investedIds, market?.companies, sort.dir, sort.key]);
 
   const tradePreview = useMemo(() => {
     if (!market || !account) return null;
@@ -169,16 +208,72 @@ export function Game() {
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto">
                   <table className="w-full text-[0.78rem]">
-                    <thead className="sticky top-0 bg-black/45 backdrop-blur">
+                    <thead className="sticky top-0 bg-black">
                       <tr className="text-left text-pg-muted">
-                        <th className="px-3 py-1.5">ID</th>
-                        <th className="px-3 py-1.5">Name</th>
-                        <th className="px-3 py-1.5 text-right">Price</th>
-                        <th className="px-3 py-1.5 text-right">Δ%</th>
+                        <th className="px-3 py-1.5">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 hover:text-pg-text"
+                            onClick={() =>
+                              setSort((s) =>
+                                s.key === "id"
+                                  ? { key: "id", dir: s.dir === "asc" ? "desc" : "asc" }
+                                  : { key: "id", dir: "asc" },
+                              )
+                            }
+                          >
+                            ID{sort.key === "id" ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
+                          </button>
+                        </th>
+                        <th className="px-3 py-1.5">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 hover:text-pg-text"
+                            onClick={() =>
+                              setSort((s) =>
+                                s.key === "name"
+                                  ? { key: "name", dir: s.dir === "asc" ? "desc" : "asc" }
+                                  : { key: "name", dir: "asc" },
+                              )
+                            }
+                          >
+                            Name{sort.key === "name" ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
+                          </button>
+                        </th>
+                        <th className="px-3 py-1.5 text-right">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 hover:text-pg-text"
+                            onClick={() =>
+                              setSort((s) =>
+                                s.key === "price"
+                                  ? { key: "price", dir: s.dir === "asc" ? "desc" : "asc" }
+                                  : { key: "price", dir: "desc" },
+                              )
+                            }
+                          >
+                            Price{sort.key === "price" ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
+                          </button>
+                        </th>
+                        <th className="px-3 py-1.5 text-right">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 hover:text-pg-text"
+                            onClick={() =>
+                              setSort((s) =>
+                                s.key === "changePct"
+                                  ? { key: "changePct", dir: s.dir === "asc" ? "desc" : "asc" }
+                                  : { key: "changePct", dir: "desc" },
+                              )
+                            }
+                          >
+                            Δ%{sort.key === "changePct" ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
+                          </button>
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {companiesSorted.map((c) => (
+                      {marketRows.map((c) => (
                         <tr key={c.id} className="border-t border-white/5">
                           <td className="px-3 py-1.5 font-mono text-pg-cyan">{c.id}</td>
                           <td className="px-3 py-1.5 text-pg-text truncate max-w-[10rem]">{c.name}</td>
