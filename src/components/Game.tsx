@@ -200,12 +200,6 @@ export function Game() {
           <section className="px-4 flex-1 min-h-0">
             {tab === "market" ? (
               <div className="h-full rounded-2xl border border-white/10 bg-black/25 backdrop-blur shadow-pg-card overflow-hidden flex flex-col">
-                <div className="px-3 py-2 flex items-center justify-between">
-                  <div className="text-[0.65rem] tracking-[0.22em] font-black uppercase text-pg-muted">
-                    Market (25)
-                  </div>
-                  <div className="text-[0.7rem] text-pg-muted">Sorted: your holdings first</div>
-                </div>
                 <div className="flex-1 min-h-0 overflow-y-auto">
                   <table className="w-full text-[0.78rem]">
                     <thead className="sticky top-0 bg-black">
