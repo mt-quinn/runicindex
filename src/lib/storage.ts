@@ -58,13 +58,18 @@ async function getRedisClient(): Promise<MinimalRedisClient> {
 
 export async function kvGetJSON<T>(key: string): Promise<T | null> {
   if (hasVercelKV()) {
-    const raw = await vercelKv.get<string>(key);
+    const raw = await vercelKv.get<any>(key);
     if (!raw) return null;
-    try {
-      return JSON.parse(raw) as T;
-    } catch {
-      return null;
+    // @vercel/kv may return either a string (common if you stored JSON as a string)
+    // or a parsed object (common if you stored a JSON value directly).
+    if (typeof raw === "string") {
+      try {
+        return JSON.parse(raw) as T;
+      } catch {
+        return null;
+      }
     }
+    return raw as T;
   }
 
   if (hasRedisUrl()) {
