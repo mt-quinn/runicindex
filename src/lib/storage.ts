@@ -5,7 +5,7 @@ type StoredValue = { value: string; expiresAt?: number };
 type MinimalRedisClient = {
   connect: () => Promise<void>;
   get: (key: string) => Promise<string | null>;
-  set: (key: string, value: string, opts?: { EX?: number }) => Promise<unknown>;
+  set: (key: string, value: string, opts?: any) => Promise<unknown>;
   on: (event: "error", listener: (err: unknown) => void) => unknown;
 };
 
@@ -133,6 +133,50 @@ export async function kvSetJSON(
   const expiresAt =
     typeof opts?.exSeconds === "number" ? Date.now() + opts.exSeconds * 1000 : undefined;
   store.set(key, { value: raw, expiresAt });
+}
+
+/**
+ * Best-effort distributed lock for KV-backed singletons (like hourly market generation).
+ * Returns a lock token if acquired, else null.
+ */
+export async function kvTryAcquireLock(args: {
+  key: string;
+  ttlSeconds: number;
+}): Promise<string | null> {
+  const token = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  if (hasVercelKV()) {
+    try {
+      // @vercel/kv supports Redis options like NX/EX.
+      const res = await (vercelKv as any).set(args.key, token, { nx: true, ex: args.ttlSeconds });
+      // Upstash-style returns "OK" on success, null on failure; tolerate truthy.
+      if (res) return token;
+      return null;
+    } catch (e) {
+      console.warn("KV lock acquire failed (vercel):", e);
+      return null;
+    }
+  }
+
+  if (hasRedisUrl()) {
+    try {
+      const client = await getRedisClient();
+      // node-redis supports NX/EX options via SET.
+      const res = await (client as any).set(args.key, token, { NX: true, EX: args.ttlSeconds });
+      if (res) return token;
+      return null;
+    } catch (e) {
+      console.warn("KV lock acquire failed (redis):", e);
+      // fall through to memory
+    }
+  }
+
+  // Memory lock (dev only)
+  const store = getMemoryStore();
+  const existing = store.get(args.key);
+  if (existing && (!existing.expiresAt || Date.now() <= existing.expiresAt)) return null;
+  store.set(args.key, { value: token, expiresAt: Date.now() + args.ttlSeconds * 1000 });
+  return token;
 }
 
 

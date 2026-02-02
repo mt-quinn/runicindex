@@ -17,6 +17,6 @@ export function getOpenAIClient() {
 }
 
 export const DEFAULT_MODEL_ID =
-  process.env.PEARLY_GATES_MODEL_ID || "gpt-5.2-2025-12-11";
+  process.env.FANTASY_EXCHANGE_MODEL_ID || "gpt-5.2-2025-12-11";
 
 

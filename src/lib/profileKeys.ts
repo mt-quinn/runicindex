@@ -1,19 +1,18 @@
-import type { GameMode } from "@/lib/types";
-
-export function dailyProfileKey(dateKey: string): string {
-  return `pg:daily:${dateKey}`;
+export function marketHourKey(hourKey: string): string {
+  // Versioned to avoid getting stuck on stale cached market formats.
+  return `fx:market:v2:hour:${hourKey}`;
 }
 
-export function randomProfileKey(gameId: string): string {
-  return `pg:random:${gameId}`;
+export function marketHourLockKey(hourKey: string): string {
+  return `fx:lock:market:v2:hour:${hourKey}`;
 }
 
-export function profileKeyFor(mode: GameMode, gameId: string, dateKey?: string): string {
-  if (mode === "daily") {
-    if (!dateKey) throw new Error("dateKey is required for daily profile lookup");
-    return dailyProfileKey(dateKey);
-  }
-  return randomProfileKey(gameId);
+export function playerAccountKey(playerId: string): string {
+  return `fx:acct:${playerId}`;
+}
+
+export function leaderboardKey(hourKey: string): string {
+  return `fx:lb:${hourKey}`;
 }
 
 

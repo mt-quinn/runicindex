@@ -1,47 +1,66 @@
-export type GameMode = "daily" | "debug-random";
+export type HourKey = string; // YYYY-MM-DDTHH (UTC)
 
-export type Alignment = "GOOD" | "EVIL";
-
-export type VisibleProfile = {
-  caseNumber: number; // 4-digit, deterministic
-  name: string;
-  age: number;
-  occupation: string;
-  causeOfDeath: string;
-  portraitUrl?: string; // public URL (Vercel Blob) for the cutout bust portrait
+export type Company = {
+  id: string; // stock ID / ticker (server-normalized to uppercase)
+  name: string; // display name (fantasy concept)
+  concept: string; // one-line explanation of what the company represents
+  price: number; // snapped hourly price
+  prevPrice: number; // previous hour price (or same on first hour)
+  change: number; // price - prevPrice
+  changePct: number; // (change / prevPrice) * 100
+  status: "LISTED" | "DELISTED";
+  logoUrl?: string;
+  logoPrompt?: string; // used server-side for nano banana logo generation
 };
 
-export type HiddenProfile = {
-  bio: string;
-  bestActs: [string, string, string];
-  worstActs: [string, string, string];
+export type NewsItem = {
+  id: string;
+  kind: "BIG" | "COMPANY";
+  hourKey: HourKey;
+  title: string;
+  body: string;
+  impact: string; // legible player-facing summary
+  companyIds?: string[];
+  imageUrl?: string;
+  imagePrompt?: string; // used server-side for nano banana news image generation
 };
 
-export type CharacterProfile = {
+export type MarketHourState = {
   version: 1;
-  dateKey?: string; // daily only
-  gameId: string; // daily: equals dateKey; random: uuid
-  mode: GameMode;
-  alignment: Alignment;
-  visible: VisibleProfile;
-  hidden: HiddenProfile;
-  // Back-compat: old cached profiles may contain faceEmoji. We ignore and strip it on read.
-  faceEmoji?: string;
+  hourKey: HourKey;
+  generatedAt: number; // ms epoch
+  companies: Company[]; // exactly 25 LISTED
+  delisted: Array<{ id: string; delistedAtHourKey: HourKey; delistPrice: number; reason: string }>;
+  news: NewsItem[]; // mix of BIG + COMPANY
 };
 
-export type QAItem = { q: string; a: string; from?: "SOUL" | "GOD" };
+export type PlayerAccount = {
+  version: 1;
+  playerId: string;
+  createdAt: number;
+  updatedAt: number;
+  cash: number;
+  positions: Record<string, number>; // companyId -> shares (negative means short)
+};
 
-export type ClientGameState = {
-  mode: GameMode;
-  dateKey: string;
-  gameId: string;
-  startedAt: number;
-  visible: VisibleProfile;
-  qa: QAItem[];
-  isComplete: boolean;
-  judgment?: "HEAVEN" | "HELL";
-  wasCorrect?: boolean;
-  godMessage?: string;
+export type AccountSnapshot = PlayerAccount & {
+  netWorth: number;
+  bankrupt: boolean;
+};
+
+export type TradeSide = "BUY" | "SELL" | "SHORT";
+
+export type TradeReceipt = {
+  ok: boolean;
+  error?: string;
+  hourKey: HourKey;
+  side: TradeSide;
+  qty: number;
+  companyId: string;
+  price: number;
+  cashDelta: number;
+  positionDelta: number;
+  account: AccountSnapshot;
 };
 
 

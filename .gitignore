@@ -1,3 +1,34 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+
+# vercel
+.vercel/
+
+# env files (keep .env.example if you add one)
+.env
+.env.*
+!.env.example
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.log
+
+# build / tooling
+.turbo/
+.swc/
+*.tsbuildinfo
+
+# misc
+.DS_Store
+
 # Dependencies
 node_modules/
 

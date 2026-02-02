@@ -28,8 +28,8 @@ const handwriting = Caveat({
 });
 
 export const metadata: Metadata = {
-  title: "Pearly Gates",
-  description: "Daily LLM interrogation game at the Pearly Gates",
+  title: "Runic Index",
+  description: "A fantasy-themed LLM-driven stock market",
 };
 
 export const viewport: Viewport = {
