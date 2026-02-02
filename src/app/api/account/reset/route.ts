@@ -21,7 +21,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, account: snap });
   } catch (e) {
     console.error("Error in /api/account/reset:", e);
-    return NextResponse.json({ error: "Reset failed" }, { status: 500 });
+    const msg = e instanceof Error ? e.message : "Reset failed";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
 

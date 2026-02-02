@@ -26,7 +26,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, account: snap });
   } catch (e) {
     console.error("Error in /api/account/get:", e);
-    return NextResponse.json({ error: "Failed to load account" }, { status: 500 });
+    const msg = e instanceof Error ? e.message : "Failed to load account";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
 

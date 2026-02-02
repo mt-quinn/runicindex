@@ -64,7 +64,14 @@ export function useFantasyExchange() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ playerId: pid }),
       });
-      if (!res.ok) throw new Error("Failed to load account");
+      if (!res.ok) {
+        try {
+          const data = (await res.json()) as any;
+          throw new Error(String(data?.error || "Failed to load account"));
+        } catch {
+          throw new Error("Failed to load account");
+        }
+      }
       const data = (await res.json()) as AccountGetResponse;
       if ("error" in data) throw new Error(data.error);
       setAccount(data.account);
