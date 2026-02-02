@@ -28,8 +28,8 @@ export function Game() {
 
   const [tab, setTab] = useState<Tab>("market");
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
-    key: "changePct",
-    dir: "desc",
+    key: "price",
+    dir: "asc",
   });
 
   const positions = useMemo(() => {
